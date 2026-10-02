@@ -1,3 +1,4 @@
+
 const twilio = require("twilio");
 
 const sendOTP = async (phone, otp) => {
@@ -7,7 +8,11 @@ const sendOTP = async (phone, otp) => {
   const messagingServiceSid =
     process.env.TWILIO_MESSAGING_SERVICE_SID?.trim();
 
-  if (!accountSid || !authToken || (!from && !messagingServiceSid)) {
+  if (
+    !accountSid ||
+    !authToken ||
+    (!from && !messagingServiceSid)
+  ) {
     throw new Error(
       "Set Twilio account credentials and either TWILIO_PHONE_NUMBER or TWILIO_MESSAGING_SERVICE_SID"
     );
@@ -17,7 +22,7 @@ const sendOTP = async (phone, otp) => {
 
   try {
     const message = await client.messages.create({
-      body: "sms_2fa",
+      body: `Your On-Ground Sales OTP is ${otp}. Do not share this OTP with anyone.`,
       to: phone,
       ...(messagingServiceSid
         ? { messagingServiceSid }
@@ -27,6 +32,7 @@ const sendOTP = async (phone, otp) => {
     console.info("Twilio accepted OTP SMS", {
       sid: message.sid,
       status: message.status,
+      to: phone,
     });
 
     return message;

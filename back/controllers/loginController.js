@@ -1,3 +1,5 @@
+
+const { randomInt } = require("crypto");
 const jwt = require("jsonwebtoken");
 
 const Admin = require("../models/Admin");
@@ -7,7 +9,9 @@ const sendOTP = require("../config/twilio");
 const normalizeIndianPhone = (value) => {
   if (value === undefined || value === null) return null;
 
-  const phone = String(value).trim().replace(/[\s()-]/g, "");
+  const phone = String(value)
+    .trim()
+    .replace(/[\s()-]/g, "");
 
   if (/^[6-9]\d{9}$/.test(phone)) {
     return `+91${phone}`;
@@ -34,6 +38,10 @@ const createAccessToken = (user) => {
     }
   );
 };
+
+// =========================
+// ADMIN LOGIN
+// =========================
 
 const adminLogin = async (req, res) => {
   try {
@@ -75,6 +83,10 @@ const adminLogin = async (req, res) => {
   }
 };
 
+// =========================
+// SEND OTP
+// =========================
+
 const sendOtp = async (req, res) => {
   try {
     const phone = normalizeIndianPhone(req.body.phone);
@@ -90,8 +102,10 @@ const sendOtp = async (req, res) => {
       phone.slice(-4)
     );
 
+    // Find existing staff user
     let user = await User.findOne({ phone });
 
+    // Create staff user if not exists
     if (!user) {
       user = await User.create({
         phone,
@@ -99,29 +113,48 @@ const sendOtp = async (req, res) => {
       });
     }
 
-    // Generate 6 digit OTP
-    const otp = Math.floor(
-      100000 + Math.random() * 900000
-    ).toString();
+    // Generate a DIFFERENT 6-digit OTP
+    const otp = randomInt(100000, 1000000).toString();
 
-    // Save OTP
+    // Save generated OTP in database
     user.otp = otp;
 
+    // OTP valid for 30 minutes
     user.otpExpiresAt = new Date(
       Date.now() + 30 * 60 * 1000
     );
 
     await user.save();
 
-    // Show OTP in development only
+    // Show OTP in development console only
     if (process.env.NODE_ENV !== "production") {
       console.info("[OTP] Development code:", otp);
+      console.info("[OTP] Backup development code: 461933");
     }
 
-    // Send OTP through Twilio
-    await sendOTP(phone, otp);
+    // Try to send OTP through Twilio
+    try {
+      await sendOTP(phone, otp);
 
-    console.log("OTP sent successfully");
+      console.log("OTP sent successfully");
+    } catch (twilioError) {
+      console.error(
+        "Twilio OTP sending failed:",
+        twilioError.message
+      );
+
+      // In production, Twilio failure should stop login flow
+      if (process.env.NODE_ENV === "production") {
+        return res.status(500).json({
+          message: "Failed to send OTP",
+        });
+      }
+
+      // In development, continue and allow backup OTP
+      console.log(
+        "Development mode: backup OTP 461933 can be used"
+      );
+    }
 
     res.json({
       message: "OTP sent successfully",
@@ -135,9 +168,14 @@ const sendOtp = async (req, res) => {
   }
 };
 
+// =========================
+// VERIFY OTP
+// =========================
+
 const verifyOtp = async (req, res) => {
   try {
     const phone = normalizeIndianPhone(req.body.phone);
+
     let { otp } = req.body;
 
     if (!phone || !otp) {
@@ -149,6 +187,7 @@ const verifyOtp = async (req, res) => {
 
     otp = otp.toString().trim();
 
+    // Find staff user
     const user = await User.findOne({ phone });
 
     if (!user) {
@@ -157,56 +196,76 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    if (!user.otp) {
-      return res.status(400).json({
-        message: "OTP not found",
-      });
-    }
+    // ========================================
+    // DEVELOPMENT BACKUP OTP
+    // ========================================
 
-    if (!user.otpExpiresAt) {
-      return res.status(400).json({
-        message: "OTP expiry not found",
-      });
-    }
-
-    if (new Date() > user.otpExpiresAt) {
-      return res.status(400).json({
-        message: "OTP expired",
-      });
-    }
-
-    /*
-     * STAFF LOGIN:
-     *
-     * 1. Normal OTP received by SMS works.
-     * 2. 461933 also works during development/testing.
-     */
-    const isNormalOtpValid = user.otp === otp;
-
-    const isDevelopmentOtpValid =
+    const isDevelopmentBackupOtp =
       process.env.NODE_ENV !== "production" &&
       otp === "461933";
 
-    if (!isNormalOtpValid && !isDevelopmentOtpValid) {
-      return res.status(400).json({
-        message: "Invalid OTP",
-      });
+    // ========================================
+    // NORMAL OTP VERIFICATION
+    // ========================================
+
+    if (!isDevelopmentBackupOtp) {
+      if (!user.otp) {
+        return res.status(400).json({
+          message: "OTP not found",
+        });
+      }
+
+      if (!user.otpExpiresAt) {
+        return res.status(400).json({
+          message: "OTP expiry not found",
+        });
+      }
+
+      // Check OTP expiry
+      if (new Date() > user.otpExpiresAt) {
+        return res.status(400).json({
+          message: "OTP expired",
+        });
+      }
+
+      // Check normal OTP
+      if (user.otp !== otp) {
+        return res.status(400).json({
+          message: "Invalid OTP",
+        });
+      }
+
+      console.log("SMS OTP verified successfully");
     }
 
-    console.log(
-      isDevelopmentOtpValid && !isNormalOtpValid
-        ? "Development OTP 461933 used for staff login"
-        : "SMS OTP verified successfully"
-    );
+    // ========================================
+    // BACKUP OTP SUCCESS
+    // ========================================
 
-    // Create JWT after successful OTP verification
+    if (isDevelopmentBackupOtp) {
+      console.log(
+        "Development backup OTP 461933 verified successfully"
+      );
+    }
+
+    // ========================================
+    // CREATE JWT
+    // ========================================
+
     const accessToken = createAccessToken(user);
 
-    // Remove OTP after successful login
+    // ========================================
+    // REMOVE OTP AFTER SUCCESSFUL LOGIN
+    // ========================================
+
     user.otp = undefined;
     user.otpExpiresAt = undefined;
 
     await user.save();
+
+    // ========================================
+    // LOGIN RESPONSE
+    // ========================================
 
     res.json({
       message: "Login successful",
@@ -227,11 +286,19 @@ const verifyOtp = async (req, res) => {
   }
 };
 
+// =========================
+// LOGOUT
+// =========================
+
 const logout = (req, res) => {
   res.json({
     message: "Logout successful",
   });
 };
+
+// =========================
+// EXPORT
+// =========================
 
 module.exports = {
   adminLogin,

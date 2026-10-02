@@ -95,6 +95,7 @@ function Login() {
         return;
       }
 
+      setOtp("");
       setOtpSent(true);
 
     } catch (error) {
